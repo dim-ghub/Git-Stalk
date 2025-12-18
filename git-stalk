@@ -1,0 +1,315 @@
+#!/usr/bin/env bash
+set -e
+
+# Default values
+PLATFORM="github"
+USER=""
+REPO=""
+TOKEN=""
+OFFSET=0
+COUNT=10
+VERBOSE=false
+
+usage() {
+    cat << EOF
+Usage: git-stalk [OPTIONS]
+
+Required:
+  -u, --user <user>        Username to stalk
+
+Optional:
+  -r, --repo <repo>        Repository filter
+  -g, --gitlab             Use GitLab instead of GitHub
+  -o, --offset <offset>    Starting offset (default: 0)
+  -c, --count <count>      Number of commits (default: 10, max: 100)
+  -t, --token <token>      API token
+  -v, --verbose            Verbose output
+  -h, --help               Show help
+
+Examples:
+  git-stalk -u octocat
+  git-stalk -u octocat -r torvalds/linux
+  git-stalk -g -u username -c 5
+EOF
+    exit 0
+}
+
+# Parse arguments
+while [[ $# -gt 0 ]]; do
+    case $1 in
+        -h|--help)
+            usage
+            ;;
+        -v|--verbose)
+            VERBOSE=true
+            shift
+            ;;
+        -g|--gitlab)
+            PLATFORM="gitlab"
+            shift
+            ;;
+        -u|--user)
+            if [[ -z "$2" ]]; then
+                echo "Error: $1 requires a username"
+                exit 1
+            fi
+            USER="$2"
+            shift 2
+            ;;
+        -r|--repo)
+            if [[ -z "$2" ]]; then
+                echo "Error: $1 requires a repository"
+                exit 1
+            fi
+            REPO="$2"
+            shift 2
+            ;;
+        -o|--offset)
+            if [[ -z "$2" ]]; then
+                echo "Error: $1 requires an offset value"
+                exit 1
+            fi
+            OFFSET="$2"
+            if ! [[ "$OFFSET" =~ ^[0-9]+$ ]]; then
+                echo "Error: offset must be a positive integer"
+                exit 1
+            fi
+            shift 2
+            ;;
+        -c|--count)
+            if [[ -z "$2" ]]; then
+                echo "Error: $1 requires a count value"
+                exit 1
+            fi
+            COUNT="$2"
+            if ! [[ "$COUNT" =~ ^[0-9]+$ ]]; then
+                echo "Error: count must be a positive integer"
+                exit 1
+            fi
+            if [[ $COUNT -gt 100 ]]; then
+                echo "Warning: count limited to 100 (API limit)"
+                COUNT=100
+            fi
+            shift 2
+            ;;
+        -t|--token)
+            if [[ -z "$2" ]]; then
+                echo "Error: $1 requires a token"
+                exit 1
+            fi
+            TOKEN="$2"
+            shift 2
+            ;;
+        *)
+            echo "Error: Unknown option: $1"
+            usage
+            ;;
+    esac
+done
+
+if [[ -z "$USER" ]]; then
+    echo "Error: -u <user> is required"
+    usage
+fi
+
+# Show verbose info if requested
+if [[ "$VERBOSE" == true ]]; then
+    echo "Platform: $PLATFORM"
+    echo "User: $USER"
+    echo "Offset: $OFFSET"
+    echo "Count: $COUNT"
+    if [[ -n "$REPO" ]]; then
+        echo "Repo filter: $REPO"
+    fi
+    if [[ -n "$TOKEN" ]]; then
+        echo "Using API token"
+    fi
+    echo ""
+fi
+
+# Check if jq is installed
+if ! command -v jq &> /dev/null; then
+    echo "Error: jq is required but not installed. Please install jq first."
+    echo "  macOS: brew install jq"
+    echo "  Ubuntu/Debian: sudo apt-get install jq"
+    echo "  Fedora: sudo dnf install jq"
+    exit 1
+fi
+
+# Check if curl is installed
+if ! command -v curl &> /dev/null; then
+    echo "Error: curl is required but not installed."
+    exit 1
+fi
+
+# For numbering later
+num=1
+# Platform-specific logic
+case "$PLATFORM" in
+    github)
+        # Calculate page for GitHub API (1-based)
+        PAGE=$(( OFFSET / COUNT + 1 ))
+        
+        # Build query
+        QUERY="author:$USER"
+        if [[ -n "$REPO" ]]; then
+            QUERY="$QUERY repo:$REPO"
+        fi
+        
+        API_URL="https://api.github.com/search/commits?q=$QUERY&sort=author-date&order=desc&per_page=$COUNT&page=$PAGE"
+        
+        HEADERS=()
+        HEADERS+=("-H" "Accept: application/vnd.github+json")
+        
+        if [[ -n "$TOKEN" ]]; then
+            HEADERS+=("-H" "Authorization: Bearer $TOKEN")
+        fi
+        
+        if [[ "$VERBOSE" == true ]]; then
+            echo "GitHub API URL: $API_URL"
+            echo ""
+        fi
+        
+        # Make API request
+        response=$(curl -s "${HEADERS[@]}" "$API_URL")
+        
+        # Check for API errors
+        if echo "$response" | jq -e '.message' > /dev/null 2>&1; then
+            error_msg=$(echo "$response" | jq -r '.message // "Unknown error"')
+            echo "GitHub API Error: $error_msg"
+            
+            # Provide helpful message for rate limiting
+            if [[ "$error_msg" == *"rate limit"* ]] && [[ -z "$TOKEN" ]]; then
+                echo ""
+                echo "Tip: Use a GitHub token to avoid rate limiting:"
+                echo "  git-stalk -t YOUR_TOKEN $USER"
+                echo "Get a token from: https://github.com/settings/tokens"
+            fi
+            exit 1
+        fi
+        
+        # Check total count
+        total_count=$(echo "$response" | jq -r '.total_count // 0')
+        if [[ $total_count -eq 0 ]]; then
+            echo "No commits found for user '$USER'"
+            if [[ -n "$REPO" ]]; then
+                echo "in repository '$REPO'"
+            fi
+            exit 0
+        fi
+        
+        # Show info about total results
+        if [[ $OFFSET -eq 0 ]]; then
+            echo "Showing $COUNT of $total_count commits for $USER"
+        else
+            echo "Showing commits $((OFFSET+1))-$((OFFSET+COUNT)) of $total_count for $USER"
+        fi
+        if [[ -n "$REPO" ]]; then
+            echo "Repository filter: $REPO"
+        fi
+        echo ""
+        
+        # Parse and display results
+        echo "$response" | jq -r '.items[] | "\(.commit.author.date) | \(.repository.full_name) | \(.commit.message | split("\n")[0])"' | while IFS= read -r line; do
+            echo "$num | $line"
+            num=$((num + 1))
+        done
+        ;;
+        
+    gitlab)
+        # GitLab API with proper pagination
+        # Calculate page (GitLab uses 1-based pages)
+        PAGE=$(( OFFSET / COUNT + 1 ))
+
+        # Build query for GitLab
+        QUERY=""
+        if [[ -n "$REPO" ]]; then
+            QUERY="project=$REPO"
+        fi
+
+        API_URL="https://gitlab.com/api/v4/users/$USER/events?action=pushed&per_page=$COUNT&page=$PAGE&sort=desc"
+
+        if [[ -n "$QUERY" ]]; then
+            API_URL="$API_URL&$QUERY"
+        fi
+
+        HEADERS=()
+        if [[ -n "$TOKEN" ]]; then
+            HEADERS+=("-H" "PRIVATE-TOKEN: $TOKEN")
+        fi
+
+        if [[ "$VERBOSE" == true ]]; then
+            echo "GitLab API URL: $API_URL"
+            echo ""
+        fi
+
+        # Make API request
+        if [[ ${#HEADERS[@]} -gt 0 ]]; then
+            response=$(curl -s "${HEADERS[@]}" "$API_URL")
+        else
+            response=$(curl -s "$API_URL")
+        fi
+
+        # Check for API errors
+        if echo "$response" | jq -e '.message' > /dev/null 2>&1; then
+            error_msg=$(echo "$response" | jq -r '.message // "Unknown error"')
+            echo "GitLab API Error: $error_msg"
+            exit 1
+        fi
+
+        # Check if user exists or has events
+        if [[ "$response" == "[]" ]] || [[ -z "$response" ]]; then
+            echo "No push events found for GitLab user '$USER'"
+            if [[ -n "$REPO" ]]; then
+                echo "with repository filter: $REPO"
+            fi
+            exit 0
+        fi
+
+        # Count total events from this page
+        total_events=$(echo "$response" | jq -r 'length')
+
+        if [[ $total_events -eq 0 ]]; then
+            echo "No commits found for GitLab user '$USER'"
+            if [[ -n "$REPO" ]]; then
+                echo "in repository '$REPO'"
+            fi
+            exit 0
+        fi
+
+        # For GitLab, we need to make an additional request to get total pages
+        # Get the "Total-Page" or "X-Total-Pages" header
+        if [[ ${#HEADERS[@]} -gt 0 ]]; then
+            total_pages=$(curl -I -s "${HEADERS[@]}" "$API_URL" | grep -i "x-total-pages" | tr -d '\r' | cut -d' ' -f2)
+        else
+            total_pages=$(curl -I -s "$API_URL" | grep -i "x-total-pages" | tr -d '\r' | cut -d' ' -f2)
+        fi
+
+        # Calculate approximate total results
+        if [[ -n "$total_pages" ]] && [[ "$total_pages" =~ ^[0-9]+$ ]]; then
+            total_count=$(( total_pages * COUNT ))
+            start_result=$(( (PAGE - 1) * COUNT + 1 ))
+            end_result=$(( start_result + total_events - 1 ))
+
+            echo "Showing results $start_result-$end_result (page $PAGE/$total_pages) for GitLab user $USER"
+        else
+            echo "Showing $total_events push events for GitLab user $USER (page $PAGE)"
+        fi
+
+        if [[ -n "$REPO" ]]; then
+            echo "Repository filter: $REPO"
+        fi
+        echo ""
+
+        # Parse and display results
+        echo "$response" | jq -r '.[] | select(.push_data != null and .push_data.action != "removed") | "\(.created_at) | \(.author_username)/\(.target_title) | \(.push_data.commit_title // "No commit message")"' | while IFS= read -r line; do
+            printf "%04d | %s\n" "$num" "$line"
+            num=$((num + 1))
+        done
+        ;;
+        
+    *)
+        echo "Error: Unknown platform '$PLATFORM'. Use 'github' or 'gitlab'."
+        exit 1
+        ;;
+esac
