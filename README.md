@@ -56,12 +56,7 @@ git clone https://github.com/dim-ghub/Git-Stalk.git
 cd Git-Stalk
 ```
 
-2. Make the script executable:
-```bash
-chmod +x git-stalk
-```
-
-3. (Optional) Move to a directory in your PATH:
+2. (Optional) Move to a directory in your PATH:
 ```bash
 sudo mv git-stalk /usr/local/bin/
 ```
