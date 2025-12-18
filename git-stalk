@@ -2,10 +2,14 @@
 set -e
 
 # Default values
+# Users can set default tokens here:
+# GITHUB_TOKEN="ghp_your_github_token_here"
+# GITLAB_TOKEN="glpat-your_gitlab_token_here"
 PLATFORM="github"
 USER=""
 REPO=""
-TOKEN=""
+GITHUB_TOKEN=""
+GITLAB_TOKEN=""
 OFFSET=0
 COUNT=10
 VERBOSE=false
@@ -32,6 +36,15 @@ Examples:
   git-stalk -g -u username -c 5
 EOF
     exit 0
+}
+
+# Function to get appropriate token for the platform
+get_token() {
+    if [[ "$PLATFORM" == "github" ]]; then
+        echo "$GITHUB_TOKEN"
+    else
+        echo "$GITLAB_TOKEN"
+    fi
 }
 
 # Parse arguments
@@ -97,7 +110,11 @@ while [[ $# -gt 0 ]]; do
                 echo "Error: $1 requires a token"
                 exit 1
             fi
-            TOKEN="$2"
+            if [[ "$PLATFORM" == "github" ]]; then
+                GITHUB_TOKEN="$2"
+            else
+                GITLAB_TOKEN="$2"
+            fi
             shift 2
             ;;
         *)
@@ -121,8 +138,8 @@ if [[ "$VERBOSE" == true ]]; then
     if [[ -n "$REPO" ]]; then
         echo "Repo filter: $REPO"
     fi
-    if [[ -n "$TOKEN" ]]; then
-        echo "Using API token"
+    if [[ -n "$(get_token)" ]]; then
+        echo "Using $(echo "$PLATFORM" | tr '[:lower:]' '[:upper:]') API token"
     fi
     echo ""
 fi
@@ -161,8 +178,8 @@ case "$PLATFORM" in
         HEADERS=()
         HEADERS+=("-H" "Accept: application/vnd.github+json")
         
-        if [[ -n "$TOKEN" ]]; then
-            HEADERS+=("-H" "Authorization: Bearer $TOKEN")
+        if [[ -n "$(get_token)" ]]; then
+            HEADERS+=("-H" "Authorization: Bearer $(get_token)")
         fi
         
         if [[ "$VERBOSE" == true ]]; then
@@ -179,7 +196,7 @@ case "$PLATFORM" in
             echo "GitHub API Error: $error_msg"
             
             # Provide helpful message for rate limiting
-            if [[ "$error_msg" == *"rate limit"* ]] && [[ -z "$TOKEN" ]]; then
+            if [[ "$error_msg" == *"rate limit"* ]] && [[ -z "$(get_token)" ]]; then
                 echo ""
                 echo "Tip: Use a GitHub token to avoid rate limiting:"
                 echo "  git-stalk -t YOUR_TOKEN $USER"
@@ -234,8 +251,8 @@ case "$PLATFORM" in
         fi
 
         HEADERS=()
-        if [[ -n "$TOKEN" ]]; then
-            HEADERS+=("-H" "PRIVATE-TOKEN: $TOKEN")
+        if [[ -n "$(get_token)" ]]; then
+            HEADERS+=("-H" "PRIVATE-TOKEN: $(get_token)")
         fi
 
         if [[ "$VERBOSE" == true ]]; then
