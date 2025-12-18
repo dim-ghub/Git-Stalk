@@ -50,6 +50,25 @@ apk add curl jq
 
 ## Installation
 
+### Quick Install (Recommended)
+
+#### One-line installation:
+```bash
+curl -fsSL https://raw.githubusercontent.com/dim-ghub/Git-Stalk/main/install.sh | bash
+```
+
+#### System-wide installation:
+```bash
+curl -fsSL https://raw.githubusercontent.com/dim-ghub/Git-Stalk/main/install.sh | sudo bash -s -- --system
+```
+
+#### Custom directory:
+```bash
+curl -fsSL https://raw.githubusercontent.com/dim-ghub/Git-Stalk/main/install.sh | bash -s -- --dir ~/bin
+```
+
+### Manual Installation
+
 1. Clone the repository:
 ```bash
 git clone https://github.com/dim-ghub/Git-Stalk.git
